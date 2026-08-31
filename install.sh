@@ -36,6 +36,62 @@ die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Run as root (use sudo)."
 command -v curl >/dev/null || die "curl is required."
 
+# A freshly-booted Ubuntu box is usually still running unattended-upgrades, which
+# holds the dpkg lock. Without this, the very first `apt-get update` dies with
+# "Could not get lock /var/lib/dpkg/lock-frontend" — the single most likely way
+# a first install fails.
+#
+# apt has waited on the lock itself since Ubuntu 20.04 / Debian 11, so ask it to
+# rather than polling with fuser (psmisc is not on every minimal image).
+APT_WAIT="-o DPkg::Lock::Timeout=300"
+
+wait_for_apt() {
+  command -v fuser >/dev/null 2>&1 || return 0
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+               /var/cache/apt/archives/lock >/dev/null 2>&1; do
+    [ "$waited" -eq 0 ] && say "Waiting for Ubuntu's own background updates to finish..."
+    sleep 5
+    waited=$((waited + 5))
+    [ "$waited" -lt 300 ] || die "Another process has held the package lock for 5 minutes. Run 'sudo systemctl stop unattended-upgrades' and try again."
+  done
+}
+
+# --- 0. Pre-flight ----------------------------------------------------------
+# Something already answering on 80/443 (some images ship Apache or nginx
+# enabled) means Caddy cannot bind and the stack dies on startup. Catch it now,
+# with a fix, instead of after a ten-minute build.
+#
+# Only checked before Docker exists: on a re-run our own Caddy is legitimately
+# holding those ports. Uses bash's /dev/tcp rather than `ss` or `lsof`, neither
+# of which is guaranteed on a minimal image.
+if ! command -v docker >/dev/null 2>&1; then
+  for PORT in 80 443; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+      exec 3<&- 3>&- 2>/dev/null || true
+      die "Port $PORT is already in use by another web server. Stop it (e.g. 'sudo systemctl disable --now apache2' or 'nginx') and re-run."
+    fi
+  done
+fi
+
+# Building Next.js needs roughly 2 GB. On a small VPS with no swap the build is
+# OOM-killed partway through, which surfaces as a confusing generic error.
+MEM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+SWAP_MB="$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+if [ "$MEM_MB" -gt 0 ] && [ "$((MEM_MB + SWAP_MB))" -lt 2400 ]; then
+  if [ ! -f /swapfile ]; then
+    say "Only ${MEM_MB}MB RAM and no swap — adding a 2GB swapfile so the build can finish..."
+    if fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; then
+      chmod 600 /swapfile && mkswap -q /swapfile >/dev/null 2>&1 && swapon /swapfile 2>/dev/null || true
+      grep -q '^/swapfile' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    else
+      warn "Could not create a swapfile. The build may run out of memory."
+    fi
+  else
+    warn "Low memory (${MEM_MB}MB) — if the build is killed, add more swap."
+  fi
+fi
+
 # Private repo support: pass GITHUB_TOKEN=<personal access token with repo read>
 # and the clone/pull will authenticate automatically.
 if [ -n "${GITHUB_TOKEN:-}" ] && printf '%s' "$REPO_URL" | grep -q '^https://github.com/'; then
@@ -53,21 +109,23 @@ if ! command -v docker >/dev/null 2>&1; then
     ubuntu|debian) : ;;
     *) die "Unsupported distro '$DISTRO_ID' — this installer supports Ubuntu and Debian." ;;
   esac
-  apt-get update -qq
-  apt-get install -y -qq ca-certificates curl git gnupg >/dev/null
+  wait_for_apt
+  apt-get $APT_WAIT update -qq
+  apt-get $APT_WAIT install -y -qq ca-certificates curl git gnupg psmisc >/dev/null
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL "https://download.docker.com/linux/$DISTRO_ID/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
   chmod a+r /etc/apt/keyrings/docker.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
 https://download.docker.com/linux/$DISTRO_ID $DISTRO_CODENAME stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt-get update -qq
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+  wait_for_apt
+  apt-get $APT_WAIT update -qq
+  apt-get $APT_WAIT install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
   systemctl enable --now docker
 else
   say "Docker already installed."
 fi
-command -v git >/dev/null || { apt-get update -qq; apt-get install -y -qq git >/dev/null; }
+command -v git >/dev/null || { wait_for_apt; apt-get $APT_WAIT update -qq; apt-get $APT_WAIT install -y -qq git >/dev/null; }
 
 # --- 2. Code ---------------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
