@@ -22,7 +22,7 @@ import { Pages } from '@/collections/Pages'
 import { Deposits } from '@/collections/Deposits'
 import { SiteSettings } from '@/globals/SiteSettings'
 import { migrations } from '@/migrations'
-import { isEmailConfigured, isS3Configured, s3 as s3env, serverUrl, smtp } from '@/lib/env'
+import { isEmailConfigured, isS3Configured, payloadSecret, s3 as s3env, serverUrl, smtp } from '@/lib/env'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -81,7 +81,7 @@ export default buildConfig({
     // provisions the database with no extra steps.
     prodMigrations: migrations,
   }),
-  secret: process.env.PAYLOAD_SECRET || '',
+  secret: payloadSecret,
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },

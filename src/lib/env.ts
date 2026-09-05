@@ -14,7 +14,9 @@ export const uploadsDir =
 export const serverUrl =
   process.env.NEXT_PUBLIC_SERVER_URL?.replace(/\/$/, '') || 'http://localhost:3000'
 
-export const payloadSecret = process.env.PAYLOAD_SECRET || ''
+export const payloadSecret =
+  process.env.PAYLOAD_SECRET ||
+  (process.env.NODE_ENV !== 'production' ? 'celestial-preview-development-secret' : '')
 
 export const databaseUri = process.env.DATABASE_URI || ''
 
