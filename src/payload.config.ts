@@ -22,7 +22,15 @@ import { Pages } from '@/collections/Pages'
 import { Deposits } from '@/collections/Deposits'
 import { SiteSettings } from '@/globals/SiteSettings'
 import { migrations } from '@/migrations'
-import { isEmailConfigured, isS3Configured, payloadSecret, s3 as s3env, serverUrl, smtp } from '@/lib/env'
+import {
+  databaseUri,
+  isEmailConfigured,
+  isS3Configured,
+  payloadSecret,
+  s3 as s3env,
+  serverUrl,
+  smtp,
+} from '@/lib/env'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -73,7 +81,7 @@ export default buildConfig({
   globals: [SiteSettings],
   db: postgresAdapter({
     pool: {
-      connectionString: process.env.DATABASE_URI || '',
+      connectionString: databaseUri,
     },
     migrationDir: path.resolve(dirname, 'migrations'),
     // In development the schema is auto-pushed for fast iteration. In production

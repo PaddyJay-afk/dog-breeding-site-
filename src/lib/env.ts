@@ -18,7 +18,7 @@ export const payloadSecret =
   process.env.PAYLOAD_SECRET ||
   (process.env.NODE_ENV !== 'production' ? 'celestial-preview-development-secret' : '')
 
-export const databaseUri = process.env.DATABASE_URI || ''
+export const databaseUri = process.env.DATABASE_URI || process.env.DATABASE_URL || ''
 
 export const smtp = {
   host: process.env.SMTP_HOST || '',
